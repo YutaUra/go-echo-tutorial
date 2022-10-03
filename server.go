@@ -4,12 +4,27 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-playground/validator"
 	"github.com/jaevor/go-nanoid"
 	"github.com/labstack/echo/v4"
 )
 
+type CustomValidator struct {
+	validator *validator.Validate
+}
+
+func (cv *CustomValidator) Validate(i interface{}) error {
+	if err := cv.validator.Struct(i); err != nil {
+		// Optionally, you could return the error to give each route more control over the status code
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	return nil
+}
+
 func main() {
 	e := echo.New()
+	e.Validator = &CustomValidator{validator: validator.New()}
+
 	e.GET("/", func(c echo.Context) error {
 		return c.String(http.StatusOK, "Hello, World!")
 	})
@@ -24,11 +39,14 @@ func main() {
 		return c.JSON(http.StatusOK, users)
 	})
 	type CreateUserBody struct {
-		Name string `json:"name"`
+		Name string `json:"name" validate:"required,min=1"`
 	}
 	userGroup.POST("", func(c echo.Context) error {
 		body := new(CreateUserBody)
 		if err := c.Bind(body); err != nil {
+			return c.String(http.StatusBadRequest, "bad request")
+		}
+		if err := c.Validate(body); err != nil {
 			return c.String(http.StatusBadRequest, "bad request")
 		}
 

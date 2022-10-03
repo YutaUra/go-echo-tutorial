@@ -3,10 +3,14 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
+
+	"go-echo-tutorial/internal/routers"
 
 	"github.com/go-playground/validator"
-	"github.com/jaevor/go-nanoid"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 )
 
 type CustomValidator struct {
@@ -21,76 +25,42 @@ func (cv *CustomValidator) Validate(i interface{}) error {
 	return nil
 }
 
+type Routes []*echo.Route
+
+func (p Routes) Len() int {
+	return len(p)
+}
+func (p Routes) Less(i, j int) bool {
+	diff := strings.Compare(p[i].Path, p[j].Path)
+	if diff != 0 {
+		return diff > 0
+	}
+	return strings.Compare(p[i].Method, p[j].Method) > 0
+}
+func (p Routes) Swap(i, j int) {
+	p[i], p[j] = p[j], p[i]
+}
+
 func main() {
 	e := echo.New()
+	e.Use(middleware.Logger())
+	e.Use(middleware.Recover())
 	e.Validator = &CustomValidator{validator: validator.New()}
 
 	e.GET("/", func(c echo.Context) error {
 		return c.String(http.StatusOK, "Hello, World!")
 	})
 
-	type User struct {
-		Id   string
-		Name string
+	jwtConfig := middleware.JWTConfig{
+		SigningKey: []byte("secret"),
+		Claims:     &routers.JWTCustomClaims{},
 	}
-	users := []*User{}
+
 	userGroup := e.Group("/users")
-	userGroup.GET("", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, users)
-	})
-	type CreateUserBody struct {
-		Name string `json:"name" validate:"required,min=1"`
-	}
-	userGroup.POST("", func(c echo.Context) error {
-		body := new(CreateUserBody)
-		if err := c.Bind(body); err != nil {
-			return c.String(http.StatusBadRequest, "bad request")
-		}
-		if err := c.Validate(body); err != nil {
-			return c.String(http.StatusBadRequest, "bad request")
-		}
+	userGroup.Use(middleware.JWTWithConfig(jwtConfig))
+	routers.UserRouter(userGroup)
 
-		canonicID, err := nanoid.Standard(21)
-		if err != nil {
-			return c.String(http.StatusInternalServerError, "Internal Server Error")
-		}
-
-		user := User{
-			Name: body.Name,
-			Id:   canonicID(),
-		}
-		users = append(users, &user)
-		return c.JSON(http.StatusCreated, user)
-	})
-	type UpdateUserBody struct {
-		Name string `json:"name"`
-	}
-	userGroup.PUT("/:id", func(c echo.Context) error {
-		id := c.Param("id")
-		body := new(UpdateUserBody)
-		if err := c.Bind(body); err != nil {
-			return c.String(http.StatusBadRequest, "bad request")
-		}
-
-		for _, user := range users {
-			if user.Id == id {
-				user.Name = body.Name
-				return c.JSON(http.StatusAccepted, user)
-			}
-		}
-		return c.JSON(http.StatusNotFound, "User not found.")
-	})
-	userGroup.DELETE("/:id", func(c echo.Context) error {
-		id := c.Param("id")
-
-		for i, user := range users {
-			if user.Id == id {
-				users = append(users[:i], users[i+1:]...)
-				return c.JSON(http.StatusAccepted, user)
-			}
-		}
-		return c.JSON(http.StatusNotFound, "User not found.")
-	})
+	routers.AuthRouter(e.Group("/auth"))
 
 	fmt.Println("Routes ->")
 	maxPathLength := 0
@@ -99,9 +69,12 @@ func main() {
 			maxPathLength = len(route.Path)
 		}
 	}
-	for i, route := range e.Routes() {
-		fmt.Printf("%2d %6s: %-*s %s\n", i, route.Method, maxPathLength+2, route.Path, route.Name)
+	routes := Routes(e.Routes())
+	sort.Sort(routes)
+	for i, route := range routes {
+		fmt.Printf("%2d %8s: %-*s %s\n", i, route.Method, maxPathLength+2, route.Path, route.Name)
 	}
 
 	e.Logger.Fatal(e.Start(":1323"))
+
 }
